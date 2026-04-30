@@ -20,9 +20,6 @@ def get_current_user(
 
 
 def require_role(*roles: str):
-    """
-    Roles match UI exactly: 'Team Member', 'Admin', 'Super Admin'
-    """
     def checker(user: dict = Depends(get_current_user)) -> dict:
         user_role = user.get("role", "Team Member")
         if user_role not in roles:
@@ -34,6 +31,15 @@ def require_role(*roles: str):
     return checker
 
 
-AnyUser        = Depends(get_current_user)
-AdminOnly      = Depends(require_role("Admin", "Super Admin"))
-SuperAdminOnly = Depends(require_role("Super Admin"))
+def admin_only(user: dict = Depends(get_current_user)) -> dict:
+    user_role = user.get("role", "Team Member")
+    if user_role not in ["Admin", "Super Admin"]:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def super_admin_only(user: dict = Depends(get_current_user)) -> dict:
+    user_role = user.get("role", "Team Member")
+    if user_role != "Super Admin":
+        raise HTTPException(status_code=403, detail="Super Admin access required")
+    return user
