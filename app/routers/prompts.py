@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from app.dependencies import get_current_user, AdminOnly
+from app.dependencies import get_current_user, admin_only
 from app.services.firebase import get_db
 from app.services.anthropic import optimize_prompt as ai_optimize
 from app.models.models import PromptCreate, OptimizePromptRequest, OptimizePromptResponse
@@ -10,7 +10,6 @@ router = APIRouter()
 
 @router.get("/")
 def list_prompts(user: dict = Depends(get_current_user)):
-    """List all prompts sorted by votes descending."""
     db = get_db()
     docs = db.collection("prompts").order_by("votes", direction="DESCENDING").stream()
     return [{"id": doc.id, **doc.to_dict()} for doc in docs]
@@ -23,6 +22,12 @@ def get_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"id": doc.id, **doc.to_dict()}
+
+
+@router.post("/optimize")
+def optimize_prompt_endpoint(body: OptimizePromptRequest, user: dict = Depends(get_current_user)):
+    optimized = ai_optimize(body.prompt, body.tool)
+    return OptimizePromptResponse(optimized_prompt=optimized)
 
 
 @router.post("/")
@@ -46,10 +51,9 @@ def update_prompt(prompt_id: str, body: PromptCreate, user: dict = Depends(get_c
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Prompt not found")
     data = doc.to_dict()
-    # Only author or admin can edit
     user_role = user.get("role", "Team Member")
     if data.get("authorId") != user["uid"] and user_role not in ["Admin", "Super Admin"]:
-        raise HTTPException(status_code=403, detail="Not authorized to edit this prompt")
+        raise HTTPException(status_code=403, detail="Not authorized")
     db.collection("prompts").document(prompt_id).update(body.model_dump())
     return {"id": prompt_id, **body.model_dump()}
 
@@ -63,14 +67,13 @@ def delete_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
     data = doc.to_dict()
     user_role = user.get("role", "Team Member")
     if data.get("authorId") != user["uid"] and user_role not in ["Admin", "Super Admin"]:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this prompt")
+        raise HTTPException(status_code=403, detail="Not authorized")
     db.collection("prompts").document(prompt_id).delete()
     return {"message": "Prompt deleted"}
 
 
 @router.post("/{prompt_id}/vote")
 def vote_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
-    """Toggle upvote on a prompt. One vote per user."""
     db = get_db()
     doc_ref = db.collection("prompts").document(prompt_id)
     doc = doc_ref.get()
@@ -87,10 +90,3 @@ def vote_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
         votes = data.get("votes", 0) + 1
     doc_ref.update({"votes": votes, "voters": voters})
     return {"votes": votes, "voted": uid in voters}
-
-
-@router.post("/optimize", response_model=OptimizePromptResponse)
-def optimize_prompt_endpoint(body: OptimizePromptRequest, user: dict = Depends(get_current_user)):
-    """Optimize a user-written prompt using Claude Haiku."""
-    optimized = ai_optimize(body.prompt, body.tool)
-    return OptimizePromptResponse(optimized_prompt=optimized)
