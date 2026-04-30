@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from app.dependencies import get_current_user, AdminOnly
+from app.dependencies import get_current_user, admin_only
 from app.services.firebase import get_db
 from app.models.models import WorkflowCreate
 
@@ -23,7 +23,7 @@ def get_workflow(workflow_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/")
-def create_workflow(body: WorkflowCreate, user: dict = Depends(AdminOnly)):
+def create_workflow(body: WorkflowCreate, user: dict = Depends(admin_only)):
     db = get_db()
     doc_ref = db.collection("workflows").document()
     data = body.model_dump()
@@ -34,7 +34,7 @@ def create_workflow(body: WorkflowCreate, user: dict = Depends(AdminOnly)):
 
 
 @router.put("/{workflow_id}")
-def update_workflow(workflow_id: str, body: WorkflowCreate, user: dict = Depends(AdminOnly)):
+def update_workflow(workflow_id: str, body: WorkflowCreate, user: dict = Depends(admin_only)):
     db = get_db()
     doc = db.collection("workflows").document(workflow_id).get()
     if not doc.exists:
@@ -44,7 +44,7 @@ def update_workflow(workflow_id: str, body: WorkflowCreate, user: dict = Depends
 
 
 @router.delete("/{workflow_id}")
-def delete_workflow(workflow_id: str, user: dict = Depends(AdminOnly)):
+def delete_workflow(workflow_id: str, user: dict = Depends(admin_only)):
     db = get_db()
     doc = db.collection("workflows").document(workflow_id).get()
     if not doc.exists:
