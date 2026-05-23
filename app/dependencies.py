@@ -4,11 +4,26 @@ from app.services.firebase import verify_token
 
 bearer_scheme = HTTPBearer()
 
+# ── DEMO ONLY — remove before production ─────────────────────────────────────
+DEMO_SUPER_ADMIN_TOKEN = "demo-shift-ai-2026"
+DEMO_USER = {
+    "uid": "demo-super-admin",
+    "email": "demo@shiftai.com",
+    "role": "Super Admin",
+    "name": "Demo Admin",
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> dict:
     token = credentials.credentials
+
+    # Demo shortcut — remove before production
+    if token == DEMO_SUPER_ADMIN_TOKEN:
+        return DEMO_USER
+
     try:
         decoded = verify_token(token)
         return decoded
