@@ -10,7 +10,22 @@ router = APIRouter()
 def list_workflows(user: dict = Depends(get_current_user)):
     db = get_db()
     docs = db.collection("workflows").stream()
-    return [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    items = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    items.sort(key=lambda w: w.get("usageCount", 0), reverse=True)
+    return items
+
+
+@router.get("/by-department/{department}")
+def workflows_by_department(department: str, user: dict = Depends(get_current_user)):
+    """
+    Single-field filter (no orderBy in the query) avoids the Firestore
+    composite-index requirement; sorting happens in Python instead.
+    """
+    db = get_db()
+    docs = db.collection("workflows").where("department", "==", department).stream()
+    items = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    items.sort(key=lambda w: w.get("usageCount", 0), reverse=True)
+    return items
 
 
 @router.get("/{workflow_id}")

@@ -10,30 +10,33 @@ router = APIRouter()
 
 
 @router.post("/{workflow_id}/chat", response_model=AgentChatResponse)
-@limiter.limit("30/minute")   # Max 30 AI chat calls per IP per minute
+@limiter.limit("30/minute")
 def agent_chat(
-    request: Request,          # Required by slowapi for per-route limits
+    request: Request,
     workflow_id: str,
     body: AgentChatRequest,
     user: dict = Depends(get_current_user),
 ):
     uid = user["uid"]
 
-    # ── 1. Enforce token budgets BEFORE calling Claude ────────────────────────
     check_budget(uid)
 
-    # ── 2. Load workflow ──────────────────────────────────────────────────────
     db = get_db()
     doc = db.collection("workflows").document(workflow_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     workflow = doc.to_dict()
-    db.collection("workflows").document(workflow_id).update(
-        {"usageCount": workflow.get("usageCount", 0) + 1}
-    )
 
-    # ── 3. Run Claude ─────────────────────────────────────────────────────────
+    # Only count usage once per session — the first message has empty history.
+    # Without this check, every follow-up message in a conversation was
+    # incrementing usageCount, which inflated the number far beyond actual
+    # distinct uses of the workflow.
+    if not body.history:
+        db.collection("workflows").document(workflow_id).update(
+            {"usageCount": workflow.get("usageCount", 0) + 1}
+        )
+
     result = run_agent(
         workflow_title=workflow.get("title", ""),
         workflow_department=workflow.get("department", ""),
@@ -46,7 +49,6 @@ def agent_chat(
         user_image=body.image,
     )
 
-    # ── 4. Record actual token usage AFTER success ────────────────────────────
     total_tokens = result["usage"].get("total_tokens", 0)
     record_usage(uid, total_tokens)
 

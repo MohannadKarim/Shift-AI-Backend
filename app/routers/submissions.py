@@ -27,6 +27,21 @@ def list_my_submissions(user: dict = Depends(get_current_user)):
     return [{"id": doc.id, **doc.to_dict()} for doc in docs]
 
 
+@router.get("/recent")
+def recent_submissions(department: str | None = None, limit: int = 5, user: dict = Depends(get_current_user)):
+    """
+    Public (non-private) recent submissions, for the Dashboard activity feed
+    and Department page. Filters/sorts in Python to avoid composite indexes.
+    """
+    db = get_db()
+    docs = db.collection("submissions").where("isPrivate", "==", False).stream()
+    items = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    if department:
+        items = [i for i in items if i.get("department") == department]
+    items.sort(key=lambda i: i.get("createdAt", ""), reverse=True)
+    return items[:limit]
+
+
 @router.post("/analyze")
 def analyze_submission_endpoint(body: AnalyzeSubmissionRequest, user: dict = Depends(get_current_user)):
     result = ai_analyze(body.title, body.description)

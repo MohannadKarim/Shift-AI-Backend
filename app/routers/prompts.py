@@ -15,6 +15,15 @@ def list_prompts(user: dict = Depends(get_current_user)):
     return [{"id": doc.id, **doc.to_dict()} for doc in docs]
 
 
+@router.get("/by-category/{category}")
+def prompts_by_category(category: str, user: dict = Depends(get_current_user)):
+    db = get_db()
+    docs = db.collection("prompts").where("category", "==", category).stream()
+    items = [{"id": doc.id, **doc.to_dict()} for doc in docs]
+    items.sort(key=lambda p: p.get("votes", 0), reverse=True)
+    return items
+
+
 @router.get("/{prompt_id}")
 def get_prompt(prompt_id: str, user: dict = Depends(get_current_user)):
     db = get_db()
