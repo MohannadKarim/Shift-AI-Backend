@@ -28,7 +28,25 @@ def get_db() -> firestore.Client:
 
 
 def verify_token(id_token: str) -> dict:
-    return auth.verify_id_token(id_token)
+    """
+    Verify a Firebase ID token and enrich with Firestore profile data
+    (role, status) so dependencies.py has everything it needs in one place.
+    """
+    decoded = auth.verify_id_token(id_token)
+    uid = decoded.get("uid")
+
+    db = get_db()
+    doc = db.collection("users").document(uid).get()
+    if doc.exists:
+        profile = doc.to_dict()
+        decoded["role"] = profile.get("role", "Team Member")
+        decoded["status"] = profile.get("status", "approved")
+    else:
+        # No Firestore profile yet — treat as pending until /auth/verify creates it
+        decoded["role"] = "Team Member"
+        decoded["status"] = "pending"
+
+    return decoded
 
 
 def set_user_role(uid: str, role: str):

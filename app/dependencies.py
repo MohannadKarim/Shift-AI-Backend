@@ -4,13 +4,17 @@ from app.services.firebase import verify_token
 
 bearer_scheme = HTTPBearer()
 
-# ── DEMO ONLY — remove before production ─────────────────────────────────────
-DEMO_SUPER_ADMIN_TOKEN = "demo-shift-ai-2026"
-DEMO_USER = {
-    "uid": "demo-super-admin",
-    "email": "demo@shiftai.com",
+# ── TEST ACCOUNT — remove before final production ─────────────────────────────
+# Use this token to bypass Firebase auth during testing:
+#   Authorization: Bearer shift-test-superadmin-2026
+TEST_SUPER_ADMIN_TOKEN = "shift-test-superadmin-2026"
+TEST_SUPER_ADMIN_USER = {
+    "uid": "test-super-admin",
+    "email": "superadmin@shiftai.test",
     "role": "Super Admin",
-    "name": "Demo Admin",
+    "firstName": "Shift",
+    "lastName": "Admin",
+    "status": "approved",
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -20,18 +24,27 @@ def get_current_user(
 ) -> dict:
     token = credentials.credentials
 
-    # Demo shortcut — remove before production
-    if token == DEMO_SUPER_ADMIN_TOKEN:
-        return DEMO_USER
+    # Test account bypass — remove before final production
+    if token == TEST_SUPER_ADMIN_TOKEN:
+        return TEST_SUPER_ADMIN_USER
 
     try:
         decoded = verify_token(token)
-        return decoded
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
+
+    # Enforce approval — pending users are blocked from all API calls
+    user_status = decoded.get("status", "approved")
+    if user_status == "pending":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="account_pending_approval",
+        )
+
+    return decoded
 
 
 def require_role(*roles: str):

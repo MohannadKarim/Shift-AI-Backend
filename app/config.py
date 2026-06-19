@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # Token budget per user per day
     daily_token_budget: int = 50_000
 
+    # Token budget for the whole org per day
+    org_daily_token_budget: int = 2_000_000
+
+    # Sentry
+    sentry_dsn: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
