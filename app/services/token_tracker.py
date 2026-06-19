@@ -119,7 +119,6 @@ def record_usage(uid: str, tokens_used: int):
     """
     Increment token counts for the user and the org.
     Call this AFTER a successful Claude response.
-    Uses Firestore transactions to avoid race conditions under concurrent requests.
     """
     if tokens_used <= 0:
         return
@@ -127,29 +126,20 @@ def record_usage(uid: str, tokens_used: int):
     date = _today()
     db = get_db()
 
-    @db.transaction()
-    def _update(transaction, user_ref, org_ref):
-        # Read both docs in the transaction
-        snapshots = [user_ref.get(transaction=transaction),
-                     org_ref.get(transaction=transaction)]
-        user_snap, org_snap = snapshots
+    user_ref = _user_ref(uid, date)
+    org_ref = _org_ref(date)
 
-        user_used = (user_snap.to_dict() or {}).get("tokens_used", 0)
-        org_used = (org_snap.to_dict() or {}).get("tokens_used", 0)
+    # Read current values
+    user_snap = user_ref.get()
+    org_snap = org_ref.get()
 
-        now_iso = datetime.now(timezone.utc).isoformat()
+    user_used = (user_snap.to_dict() or {}).get("tokens_used", 0) if user_snap.exists else 0
+    org_used = (org_snap.to_dict() or {}).get("tokens_used", 0) if org_snap.exists else 0
 
-        transaction.set(user_ref, {
-            "tokens_used": user_used + tokens_used,
-            "last_updated": now_iso,
-        })
-        transaction.set(org_ref, {
-            "tokens_used": org_used + tokens_used,
-            "last_updated": now_iso,
-        })
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    transaction = db.transaction()
-    _update(transaction, _user_ref(uid, date), _org_ref(date))
+    user_ref.set({"tokens_used": user_used + tokens_used, "last_updated": now_iso})
+    org_ref.set({"tokens_used": org_used + tokens_used, "last_updated": now_iso})
 
 
 # ── Admin helpers ─────────────────────────────────────────────────────────────
