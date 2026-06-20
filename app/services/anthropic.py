@@ -79,13 +79,13 @@ File generation (PDF / PowerPoint / HTML report):
        ONLY valid JSON (no comments, no trailing text) describing the
        document, in this exact shape:
        ```file_json
-       {
+       {{
          "type": "pdf" | "pptx" | "html",
          "title": "Short Document Title",
          "sections": [
-           {"heading": "Section or Slide Title", "body": "Optional paragraph text.", "bullets": ["Point one", "Point two"]}
+           {{"heading": "Section or Slide Title", "body": "Optional paragraph text.", "bullets": ["Point one", "Point two"]}}
          ]
-       }
+       }}
        ```
        - Use "pptx" sections as individual slides (keep bullets short, 6 max
          per section). Use "pdf"/"html" sections as report sections (body
