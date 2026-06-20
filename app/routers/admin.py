@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import admin_only
 from app.services.firebase import get_db
 from app.services import token_tracker
@@ -31,11 +31,24 @@ def org_token_usage(user: dict = Depends(admin_only)):
 
 @router.get("/tokens/org/history")
 def org_token_history(user: dict = Depends(admin_only)):
-    """Admin: get 7-day org-wide token usage history."""
-    from datetime import datetime, timezone, timedelta
-    today = datetime.now(timezone.utc)
-    results = []
-    for i in range(7):
-        date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        results.append(token_tracker.get_org_usage(date_str))
-    return results
+    """Admin: get 30-day org-wide token usage history (most recent first)."""
+    return token_tracker.get_org_usage_history(days=30)
+
+
+@router.get("/tokens/org/summary")
+def org_token_summary(user: dict = Depends(admin_only)):
+    """Admin: get daily/weekly/monthly org-wide token totals + chart history."""
+    return token_tracker.get_org_usage_summary()
+
+
+@router.put("/tokens/org/budget")
+def set_org_budget(body: dict, user: dict = Depends(admin_only)):
+    """
+    Admin: override the org-wide daily token budget.
+    Body: { "daily_budget": 2000000 }
+    """
+    budget = body.get("daily_budget")
+    if not isinstance(budget, int) or budget < 0:
+        raise HTTPException(status_code=400, detail="daily_budget must be a non-negative integer")
+    token_tracker.admin_set_org_budget(budget)
+    return {"message": f"Org daily token budget set to {budget}"}

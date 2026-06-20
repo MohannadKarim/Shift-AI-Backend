@@ -100,8 +100,14 @@ def my_token_usage(user: dict = Depends(get_current_user)):
 
 @router.get("/me/tokens/history")
 def my_token_history(user: dict = Depends(get_current_user)):
-    """Return last 7 days of token usage for the current user."""
-    return token_tracker.get_user_usage_history(user["uid"], days=7)
+    """Return last 30 days of usage for the current user (most recent first)."""
+    return token_tracker.get_user_usage_history(user["uid"], days=30)
+
+
+@router.get("/me/tokens/summary")
+def my_token_summary(user: dict = Depends(get_current_user)):
+    """Return daily/weekly/monthly token totals + chart history for the current user."""
+    return token_tracker.get_user_usage_summary(user["uid"])
 
 
 # ── Token usage (admin) ───────────────────────────────────────────────────────
@@ -114,8 +120,14 @@ def user_token_usage(uid: str, user: dict = Depends(admin_only)):
 
 @router.get("/{uid}/tokens/history")
 def user_token_history(uid: str, user: dict = Depends(admin_only)):
-    """Admin: get 7-day token history for any user."""
-    return token_tracker.get_user_usage_history(uid, days=7)
+    """Admin: get 30-day token history for any user."""
+    return token_tracker.get_user_usage_history(uid, days=30)
+
+
+@router.get("/{uid}/tokens/summary")
+def user_token_summary(uid: str, user: dict = Depends(admin_only)):
+    """Admin: get daily/weekly/monthly token totals + chart history for any user."""
+    return token_tracker.get_user_usage_summary(uid)
 
 
 @router.put("/{uid}/tokens/budget")

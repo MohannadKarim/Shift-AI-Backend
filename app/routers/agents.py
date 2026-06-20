@@ -28,11 +28,21 @@ def agent_chat(
 
     workflow = doc.to_dict()
 
-    # Only count usage once per session — the first message has empty history.
-    # Without this check, every follow-up message in a conversation was
-    # incrementing usageCount, which inflated the number far beyond actual
-    # distinct uses of the workflow.
-    if not body.history:
+    # Only count usage once per session.
+    #
+    # IMPORTANT: the frontend seeds `messages` with an initial greeting
+    # (role "model") before the user types anything, and sends the full
+    # `messages` array as `history` on every request — including the very
+    # first one. That means `body.history` is NEVER actually empty, even
+    # on a brand-new session, so checking `if not body.history` never
+    # increments usageCount.
+    #
+    # The correct signal for "this is the first real turn of the session"
+    # is "no USER message has appeared in history yet" — the greeting
+    # itself doesn't count.
+    has_prior_user_message = any(msg.role == "user" for msg in body.history)
+
+    if not has_prior_user_message:
         db.collection("workflows").document(workflow_id).update(
             {"usageCount": workflow.get("usageCount", 0) + 1}
         )
