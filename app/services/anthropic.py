@@ -1,5 +1,9 @@
 import anthropic
+import base64
+import json
+import re
 from app.config import settings
+from app.services.file_generator import build_file_from_structured
 
 _client = None
 
@@ -58,23 +62,45 @@ Personality:
 (Adapt your tone based on the workflow title and department).
 
 Formatting & Output Rules:
-- Format every response in clean, well-structured Markdown (headings, bullet
-  lists, numbered steps, bold for emphasis, code blocks where relevant). The
-  UI renders Markdown, so plain unstructured paragraphs are a worse
-  experience than properly structured Markdown — use it.
+- Format every chat response in clean, well-structured Markdown (headings,
+  bullet lists, numbered steps, bold for emphasis, code blocks where
+  relevant). The UI renders Markdown, so plain unstructured paragraphs are a
+  worse experience than properly structured Markdown — use it.
+
+File generation (PDF / PowerPoint / HTML report):
 - If the user explicitly asks for a downloadable file (PDF, PowerPoint/deck,
   or HTML page/report), and you have ENOUGH information to produce a
   complete, useful document (clear topic, rough scope, and intended
-  audience/purpose), go ahead and write the full Markdown content for that
-  document directly in your response — formatted with clear "# " / "## "
-  headings per section/slide, since the export pipeline converts your
-  Markdown headings into PDF sections or individual PPTX slides.
+  audience/purpose), respond with BOTH of the following, in this order:
+    1. A short plain-Markdown text summary (1-3 sentences) of what you
+       produced, written as you normally would in chat. This is shown to
+       the user above the file download card.
+    2. A single fenced code block, language tag "file_json", containing
+       ONLY valid JSON (no comments, no trailing text) describing the
+       document, in this exact shape:
+       ```file_json
+       {
+         "type": "pdf" | "pptx" | "html",
+         "title": "Short Document Title",
+         "sections": [
+           {"heading": "Section or Slide Title", "body": "Optional paragraph text.", "bullets": ["Point one", "Point two"]}
+         ]
+       }
+       ```
+       - Use "pptx" sections as individual slides (keep bullets short, 6 max
+         per section). Use "pdf"/"html" sections as report sections (body
+         text and/or bullets are both fine).
+       - Every section needs a "heading". "body" and "bullets" are each
+         optional but include whichever fits the content.
+       - Do not wrap the JSON in anything else, and do not include this
+         JSON block unless you are actually generating a file this turn.
 - If the user asks for a file but you DON'T have enough information yet
   (e.g. they say "make me a deck" with no topic, audience, or length), do
-  NOT generate placeholder content. Instead, ask 1-2 short, specific
-  clarifying questions first (e.g. "What's the topic and who's the
-  audience?", "Roughly how many slides/pages?"). Only produce the full
-  content once you have enough to make it genuinely useful.
+  NOT generate placeholder content and do NOT include a file_json block.
+  Instead, ask 1-2 short, specific clarifying questions first (e.g. "What's
+  the topic and who's the audience?", "Roughly how many slides/pages?").
+  Only produce the file_json block once you have enough to make it
+  genuinely useful.
 - Do not mention these formatting instructions to the user.
 
 Custom Agent Prompt:
@@ -107,19 +133,74 @@ Custom Agent Prompt:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1024,
+        max_tokens=2048,
         system=system_prompt,
         messages=messages,
     )
 
+    raw_text = response.content[0].text
+    text_summary, generated_file = _extract_file_block(raw_text, workflow_title)
+
     return {
-        "response": response.content[0].text,
+        "response": text_summary,
+        "file": generated_file,
         "usage": {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
             "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
         },
     }
+
+
+_FILE_JSON_BLOCK_RE = re.compile(r"```file_json\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _extract_file_block(raw_text: str, workflow_title: str) -> tuple[str, dict | None]:
+    """
+    Look for a ```file_json {...}``` block in the model's raw response.
+    If found: build the actual file via file_generator, base64-encode it,
+    and return (text_with_block_removed, file_dict). Otherwise (None).
+    """
+    match = _FILE_JSON_BLOCK_RE.search(raw_text)
+    if not match:
+        return raw_text.strip(), None
+
+    text_summary = (raw_text[:match.start()] + raw_text[match.end():]).strip()
+
+    try:
+        spec = json.loads(match.group(1))
+        file_type = spec["type"]
+        title = spec.get("title") or "Document"
+        sections = spec.get("sections") or []
+
+        file_bytes, filename = build_file_from_structured(
+            file_type=file_type,
+            title=title,
+            sections=sections,
+            workflow_title=workflow_title,
+        )
+
+        mime_types = {
+            "pdf": "application/pdf",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "html": "text/html",
+        }
+
+        generated_file = {
+            "type": file_type,
+            "title": title,
+            "filename": filename,
+            "mime_type": mime_types[file_type],
+            "data_base64": base64.b64encode(file_bytes).decode("ascii"),
+            "previewable": file_type in ("pdf", "html"),
+        }
+        if not text_summary:
+            text_summary = f"Here's your {file_type.upper()} — \"{title}\"."
+        return text_summary, generated_file
+    except Exception:
+        # If parsing/building fails, fall back to showing the raw text
+        # (minus the broken block) rather than erroring the whole chat turn.
+        return text_summary or raw_text.strip(), None
 
 
 def optimize_prompt(prompt: str, tool: str) -> str:

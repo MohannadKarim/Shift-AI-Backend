@@ -90,9 +90,19 @@ class AgentChatRequest(BaseModel):
     image: Optional[str] = None  # Base64 image from user
 
 
+class GeneratedFile(BaseModel):
+    type: Literal["pdf", "pptx", "html"]
+    title: str
+    filename: str
+    mime_type: str
+    data_base64: str  # the generated file, base64-encoded, ready for the UI to decode/download/preview
+    previewable: bool  # true for pdf/html — UI may render an in-app preview
+
+
 class AgentChatResponse(BaseModel):
     response: str
     usage: dict
+    file: Optional[GeneratedFile] = None
 
 
 # ── Prompt Library ────────────────────────────────────────────────────────────

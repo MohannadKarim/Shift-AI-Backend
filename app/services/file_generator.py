@@ -29,7 +29,45 @@ def _strip_markdown(text: str) -> str:
     return text.strip()
 
 
-# ── PDF ───────────────────────────────────────────────────────────────────────
+def sections_to_markdown(title: str, sections: list[dict]) -> str:
+    """
+    Convert the structured JSON the model returns (a list of sections, each
+    with a heading + body text and/or bullet list) into the Markdown string
+    that generate_pdf/generate_pptx/generate_html already know how to parse.
+
+    Expected section shape (all keys optional except heading):
+      {"heading": "Slide/Section Title", "body": "free text...", "bullets": ["a", "b"]}
+    """
+    lines: list[str] = []
+    for section in sections:
+        heading = (section.get("heading") or "").strip()
+        if heading:
+            lines.append(f"## {heading}")
+        body = (section.get("body") or "").strip()
+        if body:
+            lines.append(body)
+        for bullet in section.get("bullets") or []:
+            bullet = str(bullet).strip()
+            if bullet:
+                lines.append(f"- {bullet}")
+        lines.append("")  # blank line between sections
+    return "\n".join(lines).strip()
+
+
+def build_file_from_structured(file_type: str, title: str, sections: list[dict], workflow_title: str = "") -> tuple[bytes, str]:
+    """
+    file_type: "pdf" | "pptx" | "html"
+    sections: structured JSON sections (see sections_to_markdown)
+    Returns (file_bytes, filename).
+    """
+    content_markdown = sections_to_markdown(title, sections)
+    if file_type == "pdf":
+        return generate_pdf(title, content_markdown, workflow_title)
+    if file_type == "pptx":
+        return generate_pptx(title, content_markdown, workflow_title)
+    if file_type == "html":
+        return generate_html(title, content_markdown, workflow_title)
+    raise ValueError(f"Unsupported file type: {file_type}")
 
 def generate_pdf(title: str, content: str, workflow_title: str = "") -> tuple[bytes, str]:
     """

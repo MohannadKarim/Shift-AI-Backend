@@ -65,4 +65,5 @@ def agent_chat(
     return AgentChatResponse(
         response=result["response"],
         usage=result["usage"],
+        file=result.get("file"),
     )
