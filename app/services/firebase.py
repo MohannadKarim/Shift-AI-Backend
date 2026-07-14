@@ -1,6 +1,9 @@
 import json
+import uuid
+from urllib.parse import quote
+
 import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from firebase_admin import credentials, auth, firestore, storage as fb_storage
 from app.config import settings
 
 _db = None
@@ -17,7 +20,11 @@ def init_firebase():
     else:
         cred = credentials.Certificate(settings.firebase_credentials_path)
 
-    firebase_admin.initialize_app(cred)
+    options = {}
+    if settings.firebase_storage_bucket:
+        options["storageBucket"] = settings.firebase_storage_bucket
+
+    firebase_admin.initialize_app(cred, options)
 
 
 def get_db() -> firestore.Client:
@@ -56,3 +63,28 @@ def set_user_role(uid: str, role: str):
 
 def get_user(uid: str) -> auth.UserRecord:
     return auth.get_user(uid)
+
+
+def get_bucket():
+    """Return the default Firebase Storage bucket (Admin SDK — bypasses Storage security rules)."""
+    return fb_storage.bucket()
+
+
+def upload_file_to_storage(file_bytes: bytes, dest_path: str, content_type: str) -> str:
+    """
+    Upload bytes to Firebase Storage via the Admin SDK and return a public,
+    non-expiring download URL in the same format the Firebase client SDK's
+    getDownloadURL() produces (path + a firebaseStorageDownloadTokens token).
+
+    Using the Admin SDK here means the upload always succeeds regardless of
+    client-side Storage security rules, since it authenticates as a service
+    account rather than as the end user.
+    """
+    bucket = get_bucket()
+    blob = bucket.blob(dest_path)
+    token = str(uuid.uuid4())
+    blob.metadata = {"firebaseStorageDownloadTokens": token}
+    blob.upload_from_string(file_bytes, content_type=content_type)
+
+    encoded_path = quote(dest_path, safe="")
+    return f"https://firebasestorage.googleapis.com/v0/b/{bucket.name}/o/{encoded_path}?alt=media&token={token}"

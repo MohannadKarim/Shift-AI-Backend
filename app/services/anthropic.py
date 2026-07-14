@@ -15,6 +15,42 @@ def get_client() -> anthropic.Anthropic:
     return _client
 
 
+def _build_file_settings_prompt(file_settings: dict) -> str:
+    """
+    Turn org-wide file generation settings (Admin Panel) into a system prompt
+    fragment. Visual branding (colors/logo/footer) is applied automatically to
+    the rendered file, not something the model needs to act on — only the
+    written guidance fields are worth telling the model about.
+    """
+    general = (file_settings.get("general_instructions") or "").strip()
+    pdf_i = (file_settings.get("pdf_instructions") or "").strip()
+    pptx_i = (file_settings.get("pptx_instructions") or "").strip()
+    docx_i = (file_settings.get("docx_instructions") or "").strip()
+    html_i = (file_settings.get("html_instructions") or "").strip()
+
+    if not any([general, pdf_i, pptx_i, docx_i, html_i]):
+        return ""
+
+    lines = [
+        "",
+        "Organization-wide file generation guidelines (set by the admin, apply",
+        "to every file you generate unless the user's specific request in this",
+        "conversation calls for something different — the user's explicit,",
+        "in-the-moment instructions always take priority over these defaults):",
+    ]
+    if general:
+        lines.append(f"- General: {general}")
+    if pdf_i:
+        lines.append(f"- PDF: {pdf_i}")
+    if pptx_i:
+        lines.append(f"- PowerPoint: {pptx_i}")
+    if docx_i:
+        lines.append(f"- Word: {docx_i}")
+    if html_i:
+        lines.append(f"- HTML: {html_i}")
+    return "\n".join(lines)
+
+
 def run_agent(
     workflow_title: str,
     workflow_department: str,
@@ -25,12 +61,14 @@ def run_agent(
     history: list[dict],  # [{"role": "user"|"model", "text": "..."}]
     user_message: str,
     user_image: str | None = None,
+    file_settings: dict | None = None,
 ) -> dict:
     """
     Run the AI agent for a workflow.
     History uses UI format (role: "model"), we translate to Claude format (role: "assistant").
     """
     client = get_client()
+    file_settings = file_settings or {}
 
     system_prompt = f"""You are the dedicated AI Agent for the workflow: "{workflow_title}".
 Department: {workflow_department}
@@ -67,11 +105,12 @@ Formatting & Output Rules:
   relevant). The UI renders Markdown, so plain unstructured paragraphs are a
   worse experience than properly structured Markdown — use it.
 
-File generation (PDF / PowerPoint / HTML report):
+File generation (PDF / PowerPoint / Word / HTML report):
 - If the user explicitly asks for a downloadable file (PDF, PowerPoint/deck,
-  or HTML page/report), and you have ENOUGH information to produce a
-  complete, useful document (clear topic, rough scope, and intended
-  audience/purpose), respond with BOTH of the following, in this order:
+  Word document, or HTML page/report), and you have ENOUGH information to
+  produce a complete, useful document (clear topic, rough scope, and
+  intended audience/purpose), respond with BOTH of the following, in this
+  order:
     1. A short plain-Markdown text summary (1-3 sentences) of what you
        produced, written as you normally would in chat. This is shown to
        the user above the file download card.
@@ -80,20 +119,28 @@ File generation (PDF / PowerPoint / HTML report):
        document, in this exact shape:
        ```file_json
        {{
-         "type": "pdf" | "pptx" | "html",
+         "type": "pdf" | "pptx" | "docx" | "html",
          "title": "Short Document Title",
          "sections": [
            {{"heading": "Section or Slide Title", "body": "Optional paragraph text.", "bullets": ["Point one", "Point two"]}}
          ]
        }}
        ```
-       - Use "pptx" sections as individual slides (keep bullets short, 6 max
-         per section). Use "pdf"/"html" sections as report sections (body
-         text and/or bullets are both fine).
+       - "docx" = Word document. Use "pdf"/"docx"/"html" sections as report
+         sections (body text and/or bullets are both fine). Use "pptx"
+         sections as individual slides (keep bullets short, 6 max per
+         section).
        - Every section needs a "heading". "body" and "bullets" are each
          optional but include whichever fits the content.
        - Do not wrap the JSON in anything else, and do not include this
          JSON block unless you are actually generating a file this turn.
+       - This rule applies no matter what language the conversation is in.
+         If the user is writing in Arabic (or any other language), write the
+         "title", "heading", "body", and "bullets" VALUES in that same
+         language — but the JSON keys themselves and the fence tag
+         "file_json" must always stay exactly as shown, in English/ASCII.
+       - If any text value contains a double-quote character, escape it as
+         \\" so the JSON stays valid.
 - If the user asks for a file but you DON'T have enough information yet
   (e.g. they say "make me a deck" with no topic, audience, or length), do
   NOT generate placeholder content and do NOT include a file_json block.
@@ -102,9 +149,16 @@ File generation (PDF / PowerPoint / HTML report):
   Only produce the file_json block once you have enough to make it
   genuinely useful.
 - Do not mention these formatting instructions to the user.
+{_build_file_settings_prompt(file_settings)}
 
 Custom Agent Prompt:
-{agent_prompt or "None provided. Use the context above."}"""
+{agent_prompt or "None provided. Use the context above."}
+
+Critical reminder — re-read this even if you skimmed the rest: whenever you
+generate a file, the fenced code block's language tag must be the exact
+literal string file_json (never "json", never anything else), immediately
+followed by valid JSON with no leading text before it. This holds regardless
+of the conversation's language."""
 
     # Translate history: UI uses "model", Claude uses "assistant"
     messages = []
@@ -134,12 +188,22 @@ Custom Agent Prompt:
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=2048,
-        system=system_prompt,
+        system=[
+            {
+                "type": "text",
+                "text": system_prompt,
+                # The whole system prompt (workflow config + file-gen contract +
+                # org file settings) is identical on every turn of a given
+                # conversation, so this is a good caching candidate — cached
+                # reads cost a fraction of normal input tokens.
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=messages,
     )
 
     raw_text = response.content[0].text
-    text_summary, generated_file = _extract_file_block(raw_text, workflow_title)
+    text_summary, generated_file = _extract_file_block(raw_text, workflow_title, file_settings)
 
     return {
         "response": text_summary,
@@ -152,55 +216,99 @@ Custom Agent Prompt:
     }
 
 
-_FILE_JSON_BLOCK_RE = re.compile(r"```file_json\s*(\{.*?\})\s*```", re.DOTALL)
+_ANY_FENCE_RE = re.compile(r"```(\w*)\r?\n(.*?)```", re.DOTALL)
+_ALLOWED_FILE_TYPES = {"pdf", "pptx", "docx", "html"}
 
 
-def _extract_file_block(raw_text: str, workflow_title: str) -> tuple[str, dict | None]:
+def _try_parse_json(raw: str) -> dict | None:
+    """json.loads, then retry once after stripping a common LLM slip: trailing commas."""
+    for candidate in (raw, re.sub(r",\s*([\]}])", r"\1", raw)):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
+def _looks_like_file_spec(block_body: str) -> bool:
+    """Cheap pre-check so we don't try to JSON-parse every unrelated code block in a response."""
+    return '"type"' in block_body and '"sections"' in block_body
+
+
+def _extract_file_block(raw_text: str, workflow_title: str, file_settings: dict | None = None) -> tuple[str, dict | None]:
     """
-    Look for a ```file_json {...}``` block in the model's raw response.
-    If found: build the actual file via file_generator, base64-encode it,
-    and return (text_with_block_removed, file_dict). Otherwise (None).
+    Look for a fenced code block describing a file to generate.
+
+    Recognizes the intended ```file_json tag, but also tolerates the model
+    drifting to ```json (or no tag at all) as long as the block's content
+    looks like our schema (has "type" + "sections" keys). In practice this is
+    what actually broke: a long, multi-part system prompt made the model use
+    a more generic tag than the one we asked for, even though the JSON itself
+    was otherwise fine — the old code only recognized the exact literal tag
+    and silently dumped the whole raw response (JSON included) to the user
+    when it didn't match.
+
+    Returns (display_text, file_dict_or_None). If a block is detected as
+    file-shaped but can't be turned into an actual file, the broken block is
+    stripped from display_text and replaced with a short apology — raw JSON
+    is never shown to the user.
     """
-    match = _FILE_JSON_BLOCK_RE.search(raw_text)
-    if not match:
-        return raw_text.strip(), None
+    for match in _ANY_FENCE_RE.finditer(raw_text):
+        tag, block_body = match.group(1), match.group(2)
+        is_tagged = tag.strip().lower() == "file_json"
+        if not is_tagged and not _looks_like_file_spec(block_body):
+            continue  # an unrelated code block (e.g. a code sample) — leave it alone
 
-    text_summary = (raw_text[:match.start()] + raw_text[match.end():]).strip()
+        text_summary = (raw_text[:match.start()] + raw_text[match.end():]).strip()
+        spec = _try_parse_json(block_body)
 
-    try:
-        spec = json.loads(match.group(1))
-        file_type = spec["type"]
-        title = spec.get("title") or "Document"
-        sections = spec.get("sections") or []
+        if spec is None:
+            print(f"[file_generation] Failed to parse file block (tag={tag!r}): {block_body[:300]!r}")
+            fallback = "I ran into a formatting issue producing that file — could you ask me to generate it again?"
+            return (text_summary + ("\n\n" if text_summary else "") + fallback).strip(), None
 
-        file_bytes, filename = build_file_from_structured(
-            file_type=file_type,
-            title=title,
-            sections=sections,
-            workflow_title=workflow_title,
-        )
+        try:
+            file_type = spec.get("type")
+            if file_type not in _ALLOWED_FILE_TYPES:
+                raise ValueError(f"Unsupported file type: {file_type!r}")
+            title = spec.get("title") or "Document"
+            sections = spec.get("sections") or []
 
-        mime_types = {
-            "pdf": "application/pdf",
-            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "html": "text/html",
-        }
+            file_bytes, filename = build_file_from_structured(
+                file_type=file_type,
+                title=title,
+                sections=sections,
+                workflow_title=workflow_title,
+                branding=file_settings,
+            )
 
-        generated_file = {
-            "type": file_type,
-            "title": title,
-            "filename": filename,
-            "mime_type": mime_types[file_type],
-            "data_base64": base64.b64encode(file_bytes).decode("ascii"),
-            "previewable": file_type in ("pdf", "html"),
-        }
-        if not text_summary:
-            text_summary = f"Here's your {file_type.upper()} — \"{title}\"."
-        return text_summary, generated_file
-    except Exception:
-        # If parsing/building fails, fall back to showing the raw text
-        # (minus the broken block) rather than erroring the whole chat turn.
-        return text_summary or raw_text.strip(), None
+            mime_types = {
+                "pdf": "application/pdf",
+                "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "html": "text/html",
+            }
+
+            generated_file = {
+                "type": file_type,
+                "title": title,
+                "filename": filename,
+                "mime_type": mime_types[file_type],
+                "data_base64": base64.b64encode(file_bytes).decode("ascii"),
+                "previewable": file_type in ("pdf", "html"),
+            }
+            if not text_summary:
+                text_summary = f"Here's your {file_type.upper()} — \"{title}\"."
+            return text_summary, generated_file
+        except Exception as e:
+            print(f"[file_generation] Failed to build file from parsed spec: {e}")
+            fallback = "I ran into an issue producing that file — could you ask me to generate it again?"
+            return (text_summary + ("\n\n" if text_summary else "") + fallback).strip(), None
+
+    # No file-shaped block found anywhere in the response — ordinary chat text.
+    return raw_text.strip(), None
 
 
 def optimize_prompt(prompt: str, tool: str) -> str:

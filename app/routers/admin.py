@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.dependencies import admin_only
 from app.services.firebase import get_db
-from app.services import token_tracker
+from app.services import token_tracker, file_settings as file_settings_service
+from app.models.models import FileGenerationSettings, FileGenerationSettingsUpdate
 
 router = APIRouter()
 
@@ -52,3 +53,24 @@ def set_org_budget(body: dict, user: dict = Depends(admin_only)):
         raise HTTPException(status_code=400, detail="daily_budget must be a non-negative integer")
     token_tracker.admin_set_org_budget(budget)
     return {"message": f"Org daily token budget set to {budget}"}
+
+
+# ── File Generation Settings ─────────────────────────────────────────────────
+
+@router.get("/file-settings", response_model=FileGenerationSettings)
+def get_file_generation_settings(user: dict = Depends(admin_only)):
+    """
+    Admin: get org-wide file generation defaults (brand colors, logo, footer,
+    and written guidance for PDF/PPTX/HTML output) applied to every file the
+    agent or the export endpoints generate.
+    """
+    return file_settings_service.get_file_settings()
+
+
+@router.put("/file-settings", response_model=FileGenerationSettings)
+def update_file_generation_settings(
+    body: FileGenerationSettingsUpdate,
+    user: dict = Depends(admin_only),
+):
+    """Admin: update any subset of the org-wide file generation settings."""
+    return file_settings_service.update_file_settings(body.model_dump(exclude_unset=True))

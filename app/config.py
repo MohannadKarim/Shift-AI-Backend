@@ -10,6 +10,15 @@ class Settings(BaseSettings):
     # Firebase
     firebase_credentials_path: str = "firebase-credentials.json"
     firebase_credentials_json: str = ""  # Use this in production (Fly.io secret)
+    firebase_storage_bucket: str = ""  # e.g. "your-project.appspot.com" — only used if storage_backend="firebase"
+
+    # File uploads: "local" stores on the container's own disk (no billing/setup
+    # required — good for demos; add a Railway volume at local_storage_path to
+    # survive redeploys). Switch to "firebase" once Storage is set up (Blaze
+    # plan + firebase_storage_bucket configured) for real/production use.
+    storage_backend: str = "local"  # "local" | "firebase"
+    local_storage_path: str = "uploads_data"
+
 
     # Anthropic
     anthropic_api_key: str = "sk-ant-placeholder"

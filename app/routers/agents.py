@@ -3,6 +3,7 @@ from app.dependencies import get_current_user
 from app.services.firebase import get_db
 from app.services.anthropic import run_agent
 from app.services.token_tracker import check_budget, record_usage
+from app.services.file_settings import get_file_settings
 from app.models.models import AgentChatRequest, AgentChatResponse
 from app.limiter import limiter
 
@@ -57,6 +58,7 @@ def agent_chat(
         history=[msg.model_dump() for msg in body.history],
         user_message=body.message,
         user_image=body.image,
+        file_settings=get_file_settings(),
     )
 
     total_tokens = result["usage"].get("total_tokens", 0)
