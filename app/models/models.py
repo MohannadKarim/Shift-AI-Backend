@@ -91,7 +91,7 @@ class AgentChatRequest(BaseModel):
 
 
 class GeneratedFile(BaseModel):
-    type: Literal["pdf", "pptx", "html"]
+    type: Literal["pdf", "pptx", "docx", "html"]
     title: str
     filename: str
     mime_type: str

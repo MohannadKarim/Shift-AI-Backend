@@ -8,12 +8,21 @@ POST /files/generate/html
 
 All four accept the same request body:
   {
-    "title": "My Report",
-    "content": "Markdown text...",
+    "title": "Suggested title (used as a fallback only)",
+    "content": "The raw chat message text to turn into a file",
     "workflow_title": "Optional workflow name"
   }
 
-And stream back the file as a download with correct Content-Type headers.
+`content` is passed through a dedicated, isolated AI call
+(structure_text_for_file) that reorganizes it into a title + sections
+structure, which is then rendered by app.services.file_generator. This
+replaced an earlier design where the main chat agent tried to emit a JSON
+spec inline in its reply — that kept breaking under real load (fence-tag
+drift, truncated output). Structuring is now its own small, tool-forced call
+triggered only when the user clicks Export, decoupled entirely from
+conversational chat.
+
+Streams back the file as a download with correct Content-Type headers.
 """
 
 import os
@@ -27,7 +36,8 @@ from typing import Optional
 
 from app.config import settings
 from app.dependencies import get_current_user
-from app.services.file_generator import generate_pdf, generate_pptx, generate_docx, generate_html
+from app.services.file_generator import build_file_from_structured
+from app.services.anthropic import structure_text_for_file
 from app.services.firebase import upload_file_to_storage
 from app.services.local_storage import save_file_locally, resolve_local_path
 from app.services.file_settings import get_file_settings
@@ -53,13 +63,16 @@ def export_pdf(
     body: FileGenerateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Generate and download a PDF from AI output."""
+    """Structure the given text via a dedicated AI call, then render it as a PDF."""
     try:
-        pdf_bytes, filename = generate_pdf(
-            title=body.title,
-            content=body.content,
+        file_settings = get_file_settings()
+        spec = structure_text_for_file(body.content, "pdf", body.workflow_title or "", file_settings)
+        pdf_bytes, filename = build_file_from_structured(
+            file_type="pdf",
+            title=spec["title"],
+            sections=spec["sections"],
             workflow_title=body.workflow_title or "",
-            branding=get_file_settings(),
+            branding=file_settings,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
@@ -80,13 +93,16 @@ def export_pptx(
     body: FileGenerateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Generate and download a PowerPoint presentation from AI output."""
+    """Structure the given text via a dedicated AI call, then render it as a PowerPoint deck."""
     try:
-        pptx_bytes, filename = generate_pptx(
-            title=body.title,
-            content=body.content,
+        file_settings = get_file_settings()
+        spec = structure_text_for_file(body.content, "pptx", body.workflow_title or "", file_settings)
+        pptx_bytes, filename = build_file_from_structured(
+            file_type="pptx",
+            title=spec["title"],
+            sections=spec["sections"],
             workflow_title=body.workflow_title or "",
-            branding=get_file_settings(),
+            branding=file_settings,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PPTX generation failed: {str(e)}")
@@ -107,13 +123,16 @@ def export_docx(
     body: FileGenerateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Generate and download a Word (.docx) document from AI output."""
+    """Structure the given text via a dedicated AI call, then render it as a Word (.docx) document."""
     try:
-        docx_bytes, filename = generate_docx(
-            title=body.title,
-            content=body.content,
+        file_settings = get_file_settings()
+        spec = structure_text_for_file(body.content, "docx", body.workflow_title or "", file_settings)
+        docx_bytes, filename = build_file_from_structured(
+            file_type="docx",
+            title=spec["title"],
+            sections=spec["sections"],
             workflow_title=body.workflow_title or "",
-            branding=get_file_settings(),
+            branding=file_settings,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX generation failed: {str(e)}")
@@ -134,13 +153,16 @@ def export_html(
     body: FileGenerateRequest,
     user: dict = Depends(get_current_user),
 ):
-    """Generate a styled HTML file from AI output (also suitable for inline preview)."""
+    """Structure the given text via a dedicated AI call, then render it as a styled HTML page."""
     try:
-        html_bytes, filename = generate_html(
-            title=body.title,
-            content=body.content,
+        file_settings = get_file_settings()
+        spec = structure_text_for_file(body.content, "html", body.workflow_title or "", file_settings)
+        html_bytes, filename = build_file_from_structured(
+            file_type="html",
+            title=spec["title"],
+            sections=spec["sections"],
             workflow_title=body.workflow_title or "",
-            branding=get_file_settings(),
+            branding=file_settings,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"HTML generation failed: {str(e)}")
@@ -163,14 +185,19 @@ def preview_html(
 ):
     """
     Return rendered HTML inline (no download header) for in-chat preview.
+    Uses the same AI-structuring step as the download endpoint, so preview
+    and download always match.
     The frontend can embed this in an <iframe srcdoc="..."> or a sandboxed iframe.
     """
     try:
-        html_bytes, _ = generate_html(
-            title=body.title,
-            content=body.content,
+        file_settings = get_file_settings()
+        spec = structure_text_for_file(body.content, "html", body.workflow_title or "", file_settings)
+        html_bytes, _ = build_file_from_structured(
+            file_type="html",
+            title=spec["title"],
+            sections=spec["sections"],
             workflow_title=body.workflow_title or "",
-            branding=get_file_settings(),
+            branding=file_settings,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"HTML preview failed: {str(e)}")
